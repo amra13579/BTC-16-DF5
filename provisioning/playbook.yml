@@ -51,7 +51,18 @@
     # vendor's own endpoint at provision time. ⚠ SME: pin the versions/URLs below to the
     # build you validate on the instance.
     autopsy_msi_url: 'https://github.com/sleuthkit/autopsy/releases/download/autopsy-4.23.1/autopsy-4.23.1-64bit.msi'
-    regexplorer_url: 'https://download.ericzimmermantools.com/net6/RegistryExplorer.zip'
+    # ⚠ DOMAIN CHANGED — the old host is GONE, not merely moved. 'ericzimmermantools.com'
+    # (no 's') is NXDOMAIN at the .com registry as of 2026-09-13; every net6/* URL under it
+    # is dead, and a provision against it fails with "The remote name could not be resolved".
+    # Current host is 'ericzimmerman*s*tools.com' (note the S) and the builds are net9 —
+    # /net6/ 404s there too, so this is a real migration, not a rename. Links taken from
+    # https://ericzimmerman.github.io/ (his canonical tools page) and verified 2026-09-13:
+    # HTTP 200, application/zip, 97,927,381 bytes,
+    # sha256 7cbd0994c0329b24a95cb7e66354d959f0e3fbf5ee9811b63a7d3d898be4f4f2.
+    # NOT hash-pinned on purpose (unlike FTK below): EZ rebuilds these zips in place under a
+    # versionless URL, so a pin would break the range on his next build. The assert after the
+    # unzip is what makes a bad/renamed artifact fail loudly instead of silently.
+    regexplorer_url: 'https://download.ericzimmermanstools.com/net9/RegistryExplorer.zip'
     regripper_url: 'https://github.com/keydet89/RegRipper3.0/archive/refs/heads/master.zip'
     # DF-5.2 ext-browser (reads ext2/3/4 on Windows; NO nested virtualization needed).
     # Direct vendor download (verified: 200, application/x-msdownload, ~47 MB) — fetched
@@ -118,7 +129,11 @@
       chocolatey.chocolatey.win_chocolatey:
         name:
           - 7zip
-          - dotnet-6.0-desktopruntime   # Registry Explorer runtime
+          # Registry Explorer's net9 build is FRAMEWORK-DEPENDENT (verified: no hostfxr/
+          # coreclr in the zip; RegistryExplorer.runtimeconfig.json requires
+          # Microsoft.WindowsDesktop.App 9.0.0). 6.0 will NOT run it — it launches and dies.
+          # Keep this in lockstep with the net-N in regexplorer_url above.
+          - dotnet-9.0-desktopruntime   # Registry Explorer runtime (choco 9.0.20)
         state: present
 
   # ─── Autopsy — DF-5.4 (direct GitHub Release .msi, Apache-2.0) ───────
@@ -256,10 +271,34 @@
         url: "{{ regexplorer_url }}"
         dest: 'C:\Windows\Temp\RegistryExplorer.zip'
 
+    # dest is {{ tools_dir }}, NOT {{ tools_dir }}\RegistryExplorer: the archive already
+    # carries a single top-level RegistryExplorer/ folder (verified — 228 entries, all under
+    # that one root), so extracting into C:\Tools yields C:\Tools\RegistryExplorer\
+    # RegistryExplorer.exe. Extracting into C:\Tools\RegistryExplorer would double-nest it
+    # and contradict the C:\Tools\… path published to the trainee in the handout, the
+    # READ_ME_FIRST and training-definition.json.
     - name: Unzip Registry Explorer
       community.windows.win_unzip:
         src: 'C:\Windows\Temp\RegistryExplorer.zip'
-        dest: "{{ tools_dir }}\\RegistryExplorer"
+        dest: "{{ tools_dir }}"
+
+    # Fail here, at provision time, rather than leaving a trainee to discover in DF-5.1 that
+    # the tool is missing or landed at an unexpected path (dead URL, renamed root folder).
+    - name: Verify Registry Explorer landed where DF-5.1 expects it
+      ansible.windows.win_stat:
+        path: "{{ tools_dir }}\\RegistryExplorer\\RegistryExplorer.exe"
+      register: regexplorer_installed
+
+    - name: Assert Registry Explorer is present
+      ansible.builtin.assert:
+        that:
+          - regexplorer_installed.stat.exists
+        fail_msg: >
+          RegistryExplorer.exe is missing from {{ tools_dir }}\RegistryExplorer — the
+          download or the archive layout changed upstream. Re-check the current link on
+          https://ericzimmerman.github.io/ and update regexplorer_url (and the matching
+          dotnet-N.0-desktopruntime package) before handing this range to trainees;
+          DF-5.1 cannot be solved without it.
 
   # ─── RegRipper (Windows) — DF-5.1 cross-check ───────────────────────
     - name: Download RegRipper 3.0
