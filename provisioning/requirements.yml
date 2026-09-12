@@ -1,5 +1,22 @@
-# Windows provisioning is Ansible-over-WinRM. These collections supply the
-# win_* / chocolatey modules used by playbook.yml.
+# Windows provisioning is Ansible-over-WinRM.
+#
+# The role creates the trainee's Windows account (RDP + local admin). Source and
+# version are taken from the working Windows 11 baseline
+# (github.com/andpara/cr-sandbox-baselines), which is the only configuration proven
+# to provision this image.
+#
+# NOTE: the platform's own galaxy install already pulls a `user-access-windows`
+# (v1.0.0) role from its internal source. Installing this one alongside it is
+# deliberate — we pin the exact role the baseline validated. If the platform team
+# prefers the internal copy, drop the block below and rename the role reference in
+# playbook.yml to `user-access-windows`.
+roles:
+  - name: ansible-role-user-access-windows
+    src: https://github.com/andpara/ansible-role-user-access-windows
+    scm: git
+    version: v1.0.0
+
+# These collections supply the win_* / chocolatey modules used by playbook.yml.
 # ⚠ SME/platform: confirm these are available to the CyberRangeCZ provisioning
 # runner (this is CADMUS's first Windows CR).
 collections:

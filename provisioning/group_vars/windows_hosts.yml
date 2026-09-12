@@ -1,0 +1,7 @@
+# Windows hosts run PowerShell, not a POSIX shell. Without this, every win_* task
+# fails once the connection is up.
+#
+# Taken verbatim from the working Windows 11 baseline
+# (github.com/andpara/cr-sandbox-baselines). The group name `windows_hosts` is the
+# one the platform's inventory uses for Windows VMs — do not rename the file.
+ansible_shell_type: powershell

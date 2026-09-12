@@ -4,13 +4,19 @@
 #  Provisioning is Ansible-over-WinRM (ansible.windows / community.windows /
 #  chocolatey.chocolatey).
 #
-#  ⚠ FIRST WINDOWS CR FOR CADMUS — the SME/platform team must confirm:
-#    - the base image name + Windows mgmt user/WinRM setup (see topology.yml)
+#  RESOLVED against the working Windows 11 baseline
+#  (github.com/andpara/cr-sandbox-baselines) after the 2026-09-12 build failure:
+#    - base image `windows-11-x86_64` + mgmt user `windows` are CORRECT
+#    - `mgmt_protocol` must NOT be set on the Windows host (see topology.yml) —
+#      setting it is what left the VM without a WinRM listener on 5986
+#    - the trainee account is created by ansible-role-user-access-windows (below)
+#    - windows hosts need `ansible_shell_type: powershell` (group_vars/windows_hosts.yml)
+#
+#  ⚠ STILL TO CONFIRM on the VM:
 #    - internet egress at provision time (downloads below), or pre-bake the tools
 #      (note: FTK Imager pulls ~387 MB from Exterro's CDN — check the build-time budget)
 #    - the exact download URLs / chocolatey package names (marked ⚠ inline)
-#    - how the trainee account is created (KYPO Windows access) — the Linux
-#      user-access role does NOT apply here
+#    - the c4_r8_d80 flavor exists (the baseline uses c4_r5_d80 — see topology.yml)
 # ─────────────────────────────────────────────────────────────────────────
 - name: Provision dfvm (Windows 11 forensics workstation)
   hosts:
@@ -64,6 +70,19 @@
     ftkimager_zip_sha256: '0f717d0d91c94af94107775ae37c2e330cc2a2312a8eecc91a344c8010e82afe'
     ftkimager_setup: 'Exterro_FTK_Imager_(x64).exe'
     ftkimager_exe: 'C:\Program Files\AccessData\FTK Imager\FTK Imager.exe'   # ⚠ SME: confirm installed path for 8.3
+
+  # ─── trainee account (RDP + local admin) ────────────────────────────
+  # Runs BEFORE tasks:, so the account exists before the evidence is staged.
+  # Credentials match the Windows 11 baseline and the DF-13.3 access level, and are
+  # published to the trainee in the ACCESS_LEVEL of training-definition.json — change
+  # them in both places or not at all.
+  roles:
+    - name: ansible-role-user-access-windows
+      user_access_username: user
+      user_access_password: Password123
+      user_access_rdp: True
+      user_access_admin: True      # needed: FTK Imager / Autopsy ingest and the
+                                   # Defender exclusion require elevation
 
   tasks:
 

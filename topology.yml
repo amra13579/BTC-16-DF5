@@ -5,11 +5,25 @@
 name: btcmp-16-disk-forensics-main
 hosts:
   - name: dfvm                        # analyst workstation (visible to trainee)
-    flavor: c4_r8_d80                 # c{cpu}_r{ramGB}_d{diskGB} — Windows 11 needs headroom
+    # c{cpu}_r{ramGB}_d{diskGB}. The proven baseline runs c4_r5_d80; we keep 8 GB
+    # because Autopsy ingest over two E01s is tight at 5 GB. d80 is kept because the
+    # baseline had to move from d50 -> d80 (Windows 11 image minimum disk).
+    # ⚠ SME: if the stack fails to create, c4_r8_d80 is not in the flavor catalogue —
+    #   fall back to the baseline's c4_r5_d80.
+    flavor: c4_r8_d80
     base_box:
-      image: windows-11-x86_64        # ⚠ SME: confirm exact image name on the instance
-      mgmt_user: windows              # ⚠ SME: confirm Windows mgmt user (windows/Administrator)
-      mgmt_protocol: winrm            # Windows provisioning is Ansible-over-WinRM
+      # Verified against the working Windows 11 baseline
+      # (github.com/andpara/cr-sandbox-baselines): image name and mgmt user are correct.
+      image: windows-11-x86_64
+      mgmt_user: windows
+      # NO mgmt_protocol HERE — DO NOT ADD IT BACK.
+      # Declaring `mgmt_protocol: winrm` is what broke the 2026-09-12 build: the VM was
+      # created and got a management IP, but never brought up a WinRM HTTPS listener, so
+      # the platform's own Windows reachability gate (networking-hosts.yml) timed out
+      # after 1644s with a TCP ConnectTimeoutError on port 5986. The baseline omits the
+      # key entirely and lets the platform derive the protocol from the image; its very
+      # first fix commit (b5ce235) was to delete it. The key is harmless on Linux hosts —
+      # the router below sets it and provisions fine — but Windows must not carry it.
     hidden: false
 routers:
   - name: router
