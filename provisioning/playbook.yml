@@ -23,6 +23,18 @@
     - dfvm
   gather_facts: false
 
+  # Ride out the slow Windows first boot before any win_* task. Copied from the proven
+  # Windows play in github.com/Panagiotis-INS/BTCM-16-ADV (host wvvm). NOTE: this only
+  # helps AFTER the platform's own reachability gate (networking-hosts.yml) has passed;
+  # it does not substitute for that gate. If the build still dies at the platform gate,
+  # the cause is upstream (flavor/image) — see topology.yml.
+  pre_tasks:
+    - name: Wait for the WinRM/PSRP listener to accept connections
+      ansible.builtin.wait_for_connection:
+        delay: 0
+        sleep: 10
+        timeout: 900
+
   vars:
     case_dir: 'C:\Cases\DF5'
     # Designated WORKING directory. Everything the trainee exports or carves out of the
@@ -85,6 +97,18 @@
                                    # Defender exclusion require elevation
 
   tasks:
+
+  # ─── settle RDP before it can hang the play ──────────────────────────
+  # The user-access role enabling RDP queues a TermService restart handler; if it fires
+  # at the end of the play it can hang the run. Force it now, while the connection is
+  # fresh. Pattern from the proven BTCM-16-ADV wvvm play.
+    - name: Ensure TermService is running before the RDP handler fires
+      ansible.windows.win_service:
+        name: TermService
+        state: started
+
+    - name: Flush pending handlers now (avoids deferred RDP restart hang at end of play)
+      ansible.builtin.meta: flush_handlers
 
   # ─── base tooling via Chocolatey ────────────────────────────────────
     - name: Install base packages (choco)
