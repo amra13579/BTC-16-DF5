@@ -1,0 +1,8 @@
+# Windows provisioning is Ansible-over-WinRM. These collections supply the
+# win_* / chocolatey modules used by playbook.yml.
+# ⚠ SME/platform: confirm these are available to the CyberRangeCZ provisioning
+# runner (this is CADMUS's first Windows CR).
+collections:
+  - name: ansible.windows
+  - name: community.windows
+  - name: chocolatey.chocolatey

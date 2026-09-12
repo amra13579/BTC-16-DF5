@@ -1,0 +1,38 @@
+# DF-5 "Disk Forensics" — single Windows 11 analyst workstation.
+# The whole module (DF-5.1–5.4) is performed on this one host using the LMS tools
+# NATIVELY on Windows: Registry Explorer, RegRipper, FTK Imager, Autopsy.
+# Pure offline analysis — no target host, no Docker.
+name: btcmp-16-disk-forensics-main
+hosts:
+  - name: dfvm                        # analyst workstation (visible to trainee)
+    flavor: c4_r8_d80                 # c{cpu}_r{ramGB}_d{diskGB} — Windows 11 needs headroom
+    base_box:
+      image: windows-11-x86_64        # ⚠ SME: confirm exact image name on the instance
+      mgmt_user: windows              # ⚠ SME: confirm Windows mgmt user (windows/Administrator)
+      mgmt_protocol: winrm            # Windows provisioning is Ansible-over-WinRM
+    hidden: false
+routers:
+  - name: router
+    flavor: standard.small
+    base_box:
+      image: ubuntu-noble-x86_64
+      mgmt_user: ubuntu
+      mgmt_protocol: ssh
+    hidden: false
+networks:
+  - name: network-2
+    cidr: 192.168.0.0/24
+    accessible_by_user: true
+    hidden: false
+wan:
+  name: network-1
+  cidr: 10.10.10.0/24
+net_mappings:
+  - host: dfvm
+    network: network-2
+    ip: 192.168.0.10
+router_mappings:
+  - router: router
+    network: network-2
+    ip: 192.168.0.1
+groups: []

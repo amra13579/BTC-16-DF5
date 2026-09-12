@@ -1,0 +1,288 @@
+# ─────────────────────────────────────────────────────────────────────────
+#  DF-5 "Disk Forensics" — Windows 11 analyst workstation dfvm
+#  Installs the LMS forensics tools NATIVELY on Windows and stages the evidence.
+#  Provisioning is Ansible-over-WinRM (ansible.windows / community.windows /
+#  chocolatey.chocolatey).
+#
+#  ⚠ FIRST WINDOWS CR FOR CADMUS — the SME/platform team must confirm:
+#    - the base image name + Windows mgmt user/WinRM setup (see topology.yml)
+#    - internet egress at provision time (downloads below), or pre-bake the tools
+#      (note: FTK Imager pulls ~387 MB from Exterro's CDN — check the build-time budget)
+#    - the exact download URLs / chocolatey package names (marked ⚠ inline)
+#    - how the trainee account is created (KYPO Windows access) — the Linux
+#      user-access role does NOT apply here
+# ─────────────────────────────────────────────────────────────────────────
+- name: Provision dfvm (Windows 11 forensics workstation)
+  hosts:
+    - dfvm
+  gather_facts: false
+
+  vars:
+    case_dir: 'C:\Cases\DF5'
+    # Designated WORKING directory. Everything the trainee exports or carves out of the
+    # E01 containers must land here. It sits under case_dir, so the Defender exclusion
+    # further down covers it. Exporting anywhere else (Desktop, Downloads, Documents)
+    # puts the artifact on scanned ground.
+    work_dir: 'C:\Cases\DF5\Export'
+    tools_dir: 'C:\Tools'
+    # All auto-installed tools use DIRECT downloads (no registration wall), so the
+    # playbook never hosts/redistributes anything — every installer is fetched from the
+    # vendor's own endpoint at provision time. ⚠ SME: pin the versions/URLs below to the
+    # build you validate on the instance.
+    autopsy_msi_url: 'https://github.com/sleuthkit/autopsy/releases/download/autopsy-4.23.1/autopsy-4.23.1-64bit.msi'
+    regexplorer_url: 'https://download.ericzimmermantools.com/net6/RegistryExplorer.zip'
+    regripper_url: 'https://github.com/keydet89/RegRipper3.0/archive/refs/heads/master.zip'
+    # DF-5.2 ext-browser (reads ext2/3/4 on Windows; NO nested virtualization needed).
+    # Direct vendor download (verified: 200, application/x-msdownload, ~47 MB) — fetched
+    # at provision time, so we never host/redistribute it. Non-commercial freeware.
+    linuxreader_url: 'https://eu.diskinternals.com/download/Linux_Reader.exe'
+    # DF-5.3 FTK Imager — Exterro's own CloudFront endpoint, taken verbatim from the
+    # Download button href on https://www.exterro.com/ftk-downloads/ftk-imager-8-3.
+    #
+    # STATIC, NOT A SIGNED/SESSION URL — checked 2026-09-07:
+    #   * no query string, no Expires / Signature / Key-Pair-Id / X-Amz-* params
+    #   * 3 page fetches with 3 different User-Agents returned a byte-identical href
+    #   * re-request returns "x-cache: Hit from cloudfront" with the same etag
+    #     (5d686483b258435e6d7603ac5f93a786-4) => a SHARED cache object, not per-client
+    #   * unauthenticated: HTTP 200 with no form, cookie or referer; 405,808,295 bytes
+    #   * sha256 below reproduced by a full download AND matches the vendor's own
+    #     x-amz-meta-checksum-sha256 header
+    # ZIP contains:  Exterro_FTK_Imager_(x64).exe            (InstallShield, FileVersion 8.3.0.27)
+    #                ISSetupPrerequisites\{AE165B54-...}\CodeMeterRuntime.exe
+    #
+    # ⚠ VERSION ROT IS THE REAL RISK (not URL randomness). Exterro lists only ONE free
+    #   Imager release at a time — 8.3 today. Whether /8.3/... survives an 8.4 release is
+    #   UNTESTED (no superseded free-Imager object exists to probe). The checksum pin makes
+    #   that fail LOUDLY here rather than silently installing something else. To re-pin:
+    #     1. curl -sL https://www.exterro.com/ftk-downloads | grep -oE 'href="/ftk-downloads/[^"]*imager[^"]*"'
+    #     2. curl -sL <that page> | grep -oE 'https://[^"]*Imager[^"]*\.zip'      # the new URL
+    #     3. curl -sI <new url> | grep x-amz-meta-checksum-sha256                 # the new sha256
+    #        (confirm by downloading once and running sha256sum — do not trust the header alone)
+    #     4. update the three vars below + the provenance strings in ../../solution-writeup.md,
+    #        training.md and training-definition.json (tool version is shown to the trainee).
+    ftkimager_zip_url: 'https://d1kpmuwb7gvu1i.cloudfront.net/8.3/Imager/FTK%20Imager%208.3.0.27.zip'
+    ftkimager_zip_sha256: '0f717d0d91c94af94107775ae37c2e330cc2a2312a8eecc91a344c8010e82afe'
+    ftkimager_setup: 'Exterro_FTK_Imager_(x64).exe'
+    ftkimager_exe: 'C:\Program Files\AccessData\FTK Imager\FTK Imager.exe'   # ⚠ SME: confirm installed path for 8.3
+
+  tasks:
+
+  # ─── base tooling via Chocolatey ────────────────────────────────────
+    - name: Install base packages (choco)
+      chocolatey.chocolatey.win_chocolatey:
+        name:
+          - 7zip
+          - dotnet-6.0-desktopruntime   # Registry Explorer runtime
+        state: present
+
+  # ─── Autopsy — DF-5.4 (direct GitHub Release .msi, Apache-2.0) ───────
+    - name: Download Autopsy MSI
+      ansible.windows.win_get_url:
+        url: "{{ autopsy_msi_url }}"
+        dest: 'C:\Windows\Temp\autopsy.msi'
+
+    - name: Install Autopsy (silent MSI)
+      ansible.windows.win_package:
+        path: 'C:\Windows\Temp\autopsy.msi'
+        state: present
+
+  # ─── DiskInternals Linux Reader — DF-5.2 (browse the Alpine ext4) ────
+  # Reads ext2/3/4 on Windows with no nested virtualization / no WSL.
+  # ⚠ SME: confirm URL + silent switch (or pre-bake the tool).
+    - name: Download DiskInternals Linux Reader
+      ansible.windows.win_get_url:
+        url: "{{ linuxreader_url }}"
+        dest: 'C:\Windows\Temp\linux_reader_setup.exe'
+
+    - name: Install Linux Reader (silent)
+      ansible.windows.win_package:
+        path: 'C:\Windows\Temp\linux_reader_setup.exe'
+        arguments: '/VERYSILENT /NORESTART'   # ⚠ SME: confirm installer switches
+        state: present
+
+  # ─── FTK Imager 8.3 — DF-5.3 ────────────────────────────────────────
+  # Fetched from Exterro's CDN at provision time (no registration wall — the download
+  # button on the vendor page links straight to this object), so the repo hosts and
+  # redistributes nothing. Same pattern as Autopsy / Linux Reader above.
+  #
+  # ⚠ SME MUST VERIFY ON THE VM — the interactive install prompts for three things that
+  #   an unattended run has to absorb. The installer payload is compressed, so the exact
+  #   silent behaviour could not be confirmed off-box:
+  #     1. CodeMeter runtime — shipped as an InstallShield SetupPrerequisite; setup.exe
+  #        should run it automatically before the MSI. Confirm it does under /s.
+  #     2. Bonjour (Apple device support) — confirm whether /qn takes the default. If it
+  #        still prompts, find the feature/property name with:
+  #          setup.exe /s /v"/qn /l*v C:\Windows\Temp\ftk.log"   then grep the log,
+  #        and add e.g.  ADDLOCAL=<features minus Bonjour>  to the arguments below.
+  #     3. Defender exclusion for the install path — handled explicitly by the task
+  #        following this one, so answering the installer's own prompt is not required.
+  #   If silent install proves unworkable, fall back to pre-baking FTK Imager into the
+  #   base image; do NOT go back to trainee-installs — the download needs no account.
+    - name: Download FTK Imager 8.3 (checksum-pinned)
+      ansible.windows.win_get_url:
+        url: "{{ ftkimager_zip_url }}"
+        dest: 'C:\Windows\Temp\ftkimager.zip'
+        checksum: "{{ ftkimager_zip_sha256 }}"
+        checksum_algorithm: sha256
+
+    - name: Unzip the FTK Imager bundle
+      community.windows.win_unzip:
+        src: 'C:\Windows\Temp\ftkimager.zip'
+        dest: 'C:\Windows\Temp\ftkimager'
+        creates: 'C:\Windows\Temp\ftkimager\{{ ftkimager_setup }}'
+
+    - name: Install FTK Imager (silent InstallShield -> MSI; pulls in CodeMeter prereq)
+      ansible.windows.win_package:
+        path: 'C:\Windows\Temp\ftkimager\{{ ftkimager_setup }}'
+        arguments: '/s /v"/qn REBOOT=ReallySuppress"'   # ⚠ SME: confirm on the VM (see note above)
+        state: present
+        creates_path: "{{ ftkimager_exe }}"
+
+    - name: Confirm FTK Imager landed where the training text says it does
+      ansible.windows.win_stat:
+        path: "{{ ftkimager_exe }}"
+      register: ftk_installed
+
+    - name: Fail early if FTK Imager did not install
+      ansible.builtin.assert:
+        that:
+          - ftk_installed.stat.exists
+        fail_msg: >
+          FTK Imager is missing from {{ ftkimager_exe }} — the silent install did not
+          complete. See the ⚠ SME note above (CodeMeter / Bonjour / install path) before
+          handing this range to trainees; DF-5.3 cannot be solved without it.
+
+  # ─── Defender: evidence-preservation exclusions ─────────────────────
+  # WITHOUT THIS THE EXERCISE CORRUPTS ITSELF. DF-5.3 and DF-5.4 have the trainee EXPORT
+  # the USB implants (an obfuscated .vbs; a carved, previously-deleted .js) out of the E01
+  # containers onto disk. Inside an E01 they are inert and invisible to Defender; the
+  # instant they are written out as loose files Defender quarantines them, the trainee
+  # loses the artifact mid-analysis, and the level becomes unsolvable. The FTK Imager
+  # installer separately asks for its own install path to be excluded.
+  #
+  # Scope is deliberately narrow — the tool directory and the case folder (which contains
+  # the working/export directory). Real-time protection stays ON for the rest of the
+  # system. This is an isolated analysis VM holding fabricated, inert training artifacts
+  # (RFC-5737 addresses, .example domains, dead C2).
+  # ⚠ SME: confirm this fits your range hardening policy.
+  # NB ordering: this runs BEFORE the case tree is created and the evidence copied in,
+  # deliberately — the exclusion is in place first, so Defender never scans the E01s or
+  # the hives as they land. Add-MpPreference accepts a path that does not exist yet.
+    - name: Exclude the tool + case/working paths from Defender
+      community.windows.win_defender_exclusion:
+        paths:
+          - 'C:\Program Files\AccessData'
+          - "{{ case_dir }}"          # covers {{ work_dir }} (exports/carves) as a subfolder
+        state: present
+
+    - name: Verify the exclusions actually registered
+      ansible.windows.win_powershell:
+        script: |
+          $p = (Get-MpPreference).ExclusionPath
+          if ($p -notcontains '{{ case_dir }}') {
+            throw "Defender exclusion for {{ case_dir }} is MISSING - exported evidence will be quarantined and DF-5.3/5.4 will be unsolvable."
+          }
+          $p
+      changed_when: false
+
+  # ⚠ SME DRY-RUN CHECK, before the range goes live: in FTK Imager export
+  #   sys\svchost.vbs from df5.3-usb1.E01 into {{ work_dir }}, and in Autopsy extract the
+  #   deleted winupd.js from df5.4-usb2.E01 into the same folder. Both files must still be
+  #   present a minute later. If either vanishes, the exclusions are not holding on your
+  #   image — raise it rather than working around it locally, so the fix lands in this
+  #   playbook for every future deployment.
+
+  # ─── Eric Zimmerman Registry Explorer — DF-5.1 ──────────────────────
+    - name: Create tools directory
+      ansible.windows.win_file:
+        path: "{{ tools_dir }}"
+        state: directory
+
+    - name: Download Registry Explorer
+      ansible.windows.win_get_url:
+        url: "{{ regexplorer_url }}"
+        dest: 'C:\Windows\Temp\RegistryExplorer.zip'
+
+    - name: Unzip Registry Explorer
+      community.windows.win_unzip:
+        src: 'C:\Windows\Temp\RegistryExplorer.zip'
+        dest: "{{ tools_dir }}\\RegistryExplorer"
+
+  # ─── RegRipper (Windows) — DF-5.1 cross-check ───────────────────────
+    - name: Download RegRipper 3.0
+      ansible.windows.win_get_url:
+        url: "{{ regripper_url }}"
+        dest: 'C:\Windows\Temp\regripper.zip'
+
+    - name: Unzip RegRipper
+      community.windows.win_unzip:
+        src: 'C:\Windows\Temp\regripper.zip'
+        dest: "{{ tools_dir }}\\RegRipper"
+
+  # ─── stage evidence ─────────────────────────────────────────────────
+    - name: Create case directory tree
+      ansible.windows.win_file:
+        path: "{{ item }}"
+        state: directory
+      loop:
+        - "{{ case_dir }}"
+        - "{{ case_dir }}\\df5.1-hives"
+        - "{{ work_dir }}"          # trainee working dir — Defender-excluded via case_dir
+
+    - name: Copy registry-hive triage package
+      ansible.windows.win_copy:
+        src: "files/evidence/df5.1-hives/"
+        dest: "{{ case_dir }}\\df5.1-hives\\"
+
+    - name: Copy the disk/USB images and hashes
+      ansible.windows.win_copy:
+        src: "files/evidence/{{ item }}"
+        dest: "{{ case_dir }}\\{{ item }}"
+      loop:
+        - df5.2-af-billing.img.gz
+        - df5.3-usb1.E01
+        - df5.4-usb2.E01
+        - SHA256SUMS.txt
+
+    - name: Decompress the EXT4 image (7-Zip)
+      ansible.windows.win_command: >
+        "C:\\Program Files\\7-Zip\\7z.exe" e -y
+        "{{ case_dir }}\\df5.2-af-billing.img.gz" -o"{{ case_dir }}"
+      args:
+        creates: "{{ case_dir }}\\df5.2-af-billing.img"
+
+    - name: Drop an analyst README on the case folder
+      ansible.windows.win_copy:
+        dest: "{{ case_dir }}\\READ_ME_FIRST.txt"
+        content: |
+          Ashcombe Freight — case AF-2026-0817 (DF-5 Disk Forensics)
+          Pre-installed: Registry Explorer + RegRipper ({{ tools_dir }}),
+                 Autopsy (Start menu), DiskInternals Linux Reader (Start menu),
+                 FTK Imager 8.3.0.27 (Start menu).
+          Tool provenance (record this in your case notes):
+                 FTK Imager 8.3.0.27, obtained from Exterro's CDN at build time,
+                 sha256 0f717d0d91c94af94107775ae37c2e330cc2a2312a8eecc91a344c8010e82afe
+          ***  WORK FROM  {{ work_dir }}  ***
+          Export, carve and save EVERYTHING you pull out of the images into that
+          folder. It is excluded from Windows Defender; the rest of the system is
+          NOT. The USB implants you recover in DF-5.3 / DF-5.4 are obfuscated
+          scripts - written anywhere else (Desktop, Downloads, Documents) Defender
+          quarantines them on sight and you lose the evidence mid-analysis.
+          The images themselves are read-only. Never modify evidence in place.
+
+          Evidence in this folder:
+            df5.1-hives\  (NTUSER.DAT, SOFTWARE, SYSTEM, SAM)  -> DF-5.1 (Registry Explorer/RegRipper)
+            df5.2-af-billing.img  (Alpine ext4)               -> DF-5.2 (DiskInternals Linux Reader)
+            df5.3-usb1.E01                                     -> DF-5.3 (FTK Imager)
+            df5.4-usb2.E01                                     -> DF-5.4 (Autopsy)
+            SHA256SUMS.txt                                     -> chain of custody
+            Export\                                            -> YOUR WORKING DIRECTORY
+
+    - name: Provisioning summary
+      ansible.builtin.debug:
+        msg: >
+          dfvm ready — evidence in {{ case_dir }}; installed: Registry Explorer + RegRipper
+          in {{ tools_dir }}, Autopsy, DiskInternals Linux Reader, FTK Imager 8.3.0.27,
+          7-Zip. Working dir {{ work_dir }} created and Defender-excluded (exported
+          implants survive). ⚠ Verify tool launches and answers on the running VM (Windows GUI steps
+          are SME-checked); see the FTK Imager silent-install note above.
