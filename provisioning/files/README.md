@@ -1,7 +1,7 @@
 # DF-5 evidence — `files/evidence/`
 
 Small, self-contained lab artifacts for BTCMP-16 Module 5 (case **AF-2026-0817**,
-fictional **Ashcombe Freight Ltd**). Analysed on **one Windows 11 VM** with the LMS tools
+fictional **Ashcombe Freight Ltd**). Analysed on **one Windows 10 VM** with the LMS tools
 natively. Provisioned **directly** (total ~4.6 MB — no GitHub Releases needed). Produced
 by the build-time harness in `../../../generation/`.
 

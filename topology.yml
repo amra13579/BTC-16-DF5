@@ -1,23 +1,22 @@
-# DF-5 "Disk Forensics" — single Windows 11 analyst workstation.
+# DF-5 "Disk Forensics" — single Windows 10 analyst workstation.
 # The whole module (DF-5.1–5.4) is performed on this one host using the LMS tools
 # NATIVELY on Windows: Registry Explorer, RegRipper, FTK Imager, Autopsy.
 # Pure offline analysis — no target host, no Docker.
 name: btcmp-16-disk-forensics-main
 hosts:
   - name: dfvm                        # analyst workstation (visible to trainee)
-    # c{cpu}_r{ramGB}_d{diskGB}. Changed from c4_r8_d80 after the 2026-09-12 timeouts:
-    # that RAM x disk combo is used by NEITHER working Windows repo and likely is not a
-    # named flavor in the catalogue. c4_r8_d60 is the exact flavor of the proven full
-    # Windows CR (github.com/Panagiotis-INS/BTCM-16-ADV, host wvvm), so r8 is known-good.
-    # ⚠ RESIDUAL RISK: that lab ran win-server-2019; windows-11's first working baseline
-    #   (cr-sandbox-baselines) needed d80. If the stack fails to CREATE (not the WinRM
-    #   timeout — an OpenStack flavor/disk error), windows-11 needs d80 and the only proven
-    #   windows-11 flavor is c4_r5_d80 (5 GB). That is then the fallback.
+    # c{cpu}_r{ramGB}_d{diskGB}. c4_r8_d60 — 8 GB (r8 proven by the full Windows CR
+    # github.com/Panagiotis-INS/BTCM-16-ADV, host wvvm), d60. This flavor got dfvm past
+    # the platform reachability gate once the image was moved to windows-10 (below), so
+    # the earlier disk-size worry does not apply to this image.
     flavor: c4_r8_d60
     base_box:
-      # Verified against the working Windows 11 baseline
-      # (github.com/andpara/cr-sandbox-baselines): image name and mgmt user are correct.
-      image: windows-11-x86_64
+      # windows-10-x86_64 — VERIFIED WORKING on this platform: it brings up the
+      # WinRM/PSRP listener in time and passes the platform's reachability gate.
+      # DO NOT revert to windows-11-x86_64: with that image the gate timed out (build of
+      # 2026-09-12) — windows-11 did not raise a listener within the ~1600s window here,
+      # windows-10 does. mgmt_user stays `windows`.
+      image: windows-10-x86_64
       mgmt_user: windows
       # mgmt_protocol: winrm — REQUIRED. The platform injects the PSRP/WinRM-HTTPS
       # connection config (ansible_connection=psrp, cert_validation=ignore, port 5986)

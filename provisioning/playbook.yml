@@ -1,24 +1,27 @@
 # ─────────────────────────────────────────────────────────────────────────
-#  DF-5 "Disk Forensics" — Windows 11 analyst workstation dfvm
+#  DF-5 "Disk Forensics" — Windows 10 analyst workstation dfvm
 #  Installs the LMS forensics tools NATIVELY on Windows and stages the evidence.
 #  Provisioning is Ansible-over-WinRM (ansible.windows / community.windows /
 #  chocolatey.chocolatey).
 #
-#  RESOLVED against the working Windows 11 baseline
-#  (github.com/andpara/cr-sandbox-baselines) after the 2026-09-12 build failure:
-#    - base image `windows-11-x86_64` + mgmt user `windows` are CORRECT
-#    - `mgmt_protocol` must NOT be set on the Windows host (see topology.yml) —
-#      setting it is what left the VM without a WinRM listener on 5986
+#  RESOLVED across the 2026-09-12 build failures (see topology.yml for full detail):
+#    - base image is `windows-10-x86_64` — windows-11-x86_64 never raised a WinRM
+#      listener in time and timed out the platform reachability gate; windows-10 passes it
+#    - `mgmt_protocol: winrm` IS set on the host — the platform injects the PSRP/WinRM
+#      connection config only when it is present (proven by github.com/Panagiotis-INS/
+#      BTCM-16-ADV, a full Windows CR on this platform)
+#    - flavor c4_r8_d60 (8 GB; r8 proven by that same lab)
 #    - the trainee account is created by ansible-role-user-access-windows (below)
 #    - windows hosts need `ansible_shell_type: powershell` (group_vars/windows_hosts.yml)
+#      and, per BTCM-16-ADV, a wait_for_connection pre_task + a flush_handlers/TermService
+#      guard so the RDP restart doesn't hang the play (both below)
 #
 #  ⚠ STILL TO CONFIRM on the VM:
 #    - internet egress at provision time (downloads below), or pre-bake the tools
 #      (note: FTK Imager pulls ~387 MB from Exterro's CDN — check the build-time budget)
 #    - the exact download URLs / chocolatey package names (marked ⚠ inline)
-#    - the c4_r8_d80 flavor exists (the baseline uses c4_r5_d80 — see topology.yml)
 # ─────────────────────────────────────────────────────────────────────────
-- name: Provision dfvm (Windows 11 forensics workstation)
+- name: Provision dfvm (Windows 10 forensics workstation)
   hosts:
     - dfvm
   gather_facts: false
@@ -211,12 +214,14 @@
   # NB ordering: this runs BEFORE the case tree is created and the evidence copied in,
   # deliberately — the exclusion is in place first, so Defender never scans the E01s or
   # the hives as they land. Add-MpPreference accepts a path that does not exist yet.
+    # There is no win_defender_exclusion module — Add-MpPreference is the supported path.
+    # It is additive and de-duplicates, so re-running the play is idempotent. Accepts
+    # paths that do not exist yet, which is why this runs before the case tree is created.
     - name: Exclude the tool + case/working paths from Defender
-      community.windows.win_defender_exclusion:
-        paths:
-          - 'C:\Program Files\AccessData'
-          - "{{ case_dir }}"          # covers {{ work_dir }} (exports/carves) as a subfolder
-        state: present
+      ansible.windows.win_shell: |
+        Add-MpPreference -ExclusionPath 'C:\Program Files\AccessData'
+        Add-MpPreference -ExclusionPath '{{ case_dir }}'
+      changed_when: false
 
     - name: Verify the exclusions actually registered
       ansible.windows.win_powershell:
