@@ -140,10 +140,15 @@
         url: "{{ linuxreader_url }}"
         dest: 'C:\Windows\Temp\linux_reader_setup.exe'
 
-    - name: Install Linux Reader (silent)
+    # The installer is NSIS (Nullsoft Install System v3.09 — verified by fingerprinting
+    # the downloaded exe: "Nullsoft.NSIS.exehead" / "NullsoftInst" signatures). The silent
+    # switch for NSIS is `/S` (uppercase, case-sensitive). The old `/VERYSILENT` is an
+    # Inno Setup switch — NSIS ignores it and shows the interactive GUI, which is why an
+    # unattended run hung here indefinitely.
+    - name: Install Linux Reader (silent, NSIS /S)
       ansible.windows.win_package:
         path: 'C:\Windows\Temp\linux_reader_setup.exe'
-        arguments: '/VERYSILENT /NORESTART'   # ⚠ SME: confirm installer switches
+        arguments: /S
         state: present
 
   # ─── FTK Imager 8.3 — DF-5.3 ────────────────────────────────────────
