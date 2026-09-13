@@ -63,7 +63,6 @@
     # versionless URL, so a pin would break the range on his next build. The assert after the
     # unzip is what makes a bad/renamed artifact fail loudly instead of silently.
     regexplorer_url: 'https://download.ericzimmermanstools.com/net9/RegistryExplorer.zip'
-    regripper_url: 'https://github.com/keydet89/RegRipper3.0/archive/refs/heads/master.zip'
     # DF-5.2 ext-browser (reads ext2/3/4 on Windows; NO nested virtualization needed).
     # Direct vendor download (verified: 200, application/x-msdownload, ~47 MB) — fetched
     # at provision time, so we never host/redistribute it. Non-commercial freeware.
@@ -275,8 +274,8 @@
     # carries a single top-level RegistryExplorer/ folder (verified — 228 entries, all under
     # that one root), so extracting into C:\Tools yields C:\Tools\RegistryExplorer\
     # RegistryExplorer.exe. Extracting into C:\Tools\RegistryExplorer would double-nest it
-    # and contradict the C:\Tools\… path published to the trainee in the handout, the
-    # READ_ME_FIRST and training-definition.json.
+    # and contradict the C:\Tools\… path published to the trainee in the handout and in
+    # training-definition.json.
     - name: Unzip Registry Explorer
       community.windows.win_unzip:
         src: 'C:\Windows\Temp\RegistryExplorer.zip'
@@ -300,16 +299,61 @@
           dotnet-N.0-desktopruntime package) before handing this range to trainees;
           DF-5.1 cannot be solved without it.
 
-  # ─── RegRipper (Windows) — DF-5.1 cross-check ───────────────────────
-    - name: Download RegRipper 3.0
-      ansible.windows.win_get_url:
-        url: "{{ regripper_url }}"
-        dest: 'C:\Windows\Temp\regripper.zip'
+  # ─── desktop shortcuts for every tool ───────────────────────────────
+  # Every tool the module uses gets an icon on the desktop, so the kit is obvious the
+  # moment the trainee lands on the machine and nobody has to go hunting in C:\Tools or
+  # paging through the Start menu.
+  #
+  # Two different problems to solve. Registry Explorer is a portable ZIP: no installer
+  # ran, so nothing anywhere points at it and we must author its shortcut outright.
+  # Autopsy, Linux Reader and FTK Imager DID run installers, so they already have correct
+  # Start-menu shortcuts — with icons, working directories and (for Autopsy) the right
+  # launcher out of several candidate exes. Copying those .lnk files beats reconstructing
+  # each install path by hand, which is exactly the guesswork that breaks on a version bump.
+    - name: Desktop shortcut for Registry Explorer
+      community.windows.win_shortcut:
+        src: "{{ tools_dir }}\\RegistryExplorer\\RegistryExplorer.exe"
+        dest: 'C:\Users\Public\Desktop\Registry Explorer.lnk'
+        description: 'Registry Explorer — registry hive analysis'
 
-    - name: Unzip RegRipper
-      community.windows.win_unzip:
-        src: 'C:\Windows\Temp\regripper.zip'
-        dest: "{{ tools_dir }}\\RegRipper"
+    - name: Copy the installed tools' shortcuts onto the desktop
+      ansible.windows.win_powershell:
+        script: |
+          $ErrorActionPreference = 'Stop'
+          $desktop = 'C:\Users\Public\Desktop'
+          $roots = @(
+            "$env:ProgramData\Microsoft\Windows\Start Menu\Programs",
+            "$env:AppData\Microsoft\Windows\Start Menu\Programs"
+          ) | Where-Object { Test-Path $_ }
+          # First match wins per tool; installers vary the folder depth, so recurse.
+          $wanted = @{
+            'Autopsy'                     = 'Autopsy*.lnk'
+            'DiskInternals Linux Reader'  = '*Linux Reader*.lnk'
+            'FTK Imager'                  = '*FTK Imager*.lnk'
+          }
+          $missing = @()
+          foreach ($name in $wanted.Keys) {
+            $lnk = Get-ChildItem -Path $roots -Recurse -Filter $wanted[$name] -ErrorAction SilentlyContinue |
+                   Select-Object -First 1
+            if ($lnk) {
+              Copy-Item -LiteralPath $lnk.FullName -Destination (Join-Path $desktop "$name.lnk") -Force
+            } else {
+              $missing += $name
+            }
+          }
+          if ($missing.Count) { throw "No Start-menu shortcut found for: $($missing -join ', ')" }
+      changed_when: false
+
+    # The desktop is the trainee's whole map of the toolkit, so an icon silently not
+    # arriving is worth failing the build over.
+    - name: Confirm all four tools are on the desktop
+      ansible.windows.win_powershell:
+        script: |
+          $expected = 'Registry Explorer', 'Autopsy', 'DiskInternals Linux Reader', 'FTK Imager'
+          $missing = $expected | Where-Object { -not (Test-Path "C:\Users\Public\Desktop\$_.lnk") }
+          if ($missing) { throw "Desktop shortcuts missing: $($missing -join ', ')" }
+          $expected
+      changed_when: false
 
   # ─── stage evidence ─────────────────────────────────────────────────
     - name: Create case directory tree
@@ -326,7 +370,10 @@
         src: "files/evidence/df5.1-hives/"
         dest: "{{ case_dir }}\\df5.1-hives\\"
 
-    - name: Copy the disk/USB images and hashes
+    # No hash manifest is staged on the box. The acquisition hashes are published in
+    # training-definition.json, where they belong: a SHA256SUMS.txt sitting in the
+    # evidence folder is a build artifact, not something a responder would find.
+    - name: Copy the disk and USB images
       ansible.windows.win_copy:
         src: "files/evidence/{{ item }}"
         dest: "{{ case_dir }}\\{{ item }}"
@@ -334,7 +381,6 @@
         - df5.2-af-billing.img.gz
         - df5.3-usb1.E01
         - df5.4-usb2.E01
-        - SHA256SUMS.txt
 
     - name: Decompress the EXT4 image (7-Zip)
       ansible.windows.win_command: >
@@ -343,38 +389,11 @@
       args:
         creates: "{{ case_dir }}\\df5.2-af-billing.img"
 
-    - name: Drop an analyst README on the case folder
-      ansible.windows.win_copy:
-        dest: "{{ case_dir }}\\READ_ME_FIRST.txt"
-        content: |
-          Ashcombe Freight — case AF-2026-0817 (DF-5 Disk Forensics)
-          Pre-installed: Registry Explorer + RegRipper ({{ tools_dir }}),
-                 Autopsy (Start menu), DiskInternals Linux Reader (Start menu),
-                 FTK Imager 8.3.0.27 (Start menu).
-          Tool provenance (record this in your case notes):
-                 FTK Imager 8.3.0.27, obtained from Exterro's CDN at build time,
-                 sha256 0f717d0d91c94af94107775ae37c2e330cc2a2312a8eecc91a344c8010e82afe
-          ***  WORK FROM  {{ work_dir }}  ***
-          Export, carve and save EVERYTHING you pull out of the images into that
-          folder. It is excluded from Windows Defender; the rest of the system is
-          NOT. The USB implants you recover in DF-5.3 / DF-5.4 are obfuscated
-          scripts - written anywhere else (Desktop, Downloads, Documents) Defender
-          quarantines them on sight and you lose the evidence mid-analysis.
-          The images themselves are read-only. Never modify evidence in place.
-
-          Evidence in this folder:
-            df5.1-hives\  (NTUSER.DAT, SOFTWARE, SYSTEM, SAM)  -> DF-5.1 (Registry Explorer/RegRipper)
-            df5.2-af-billing.img  (Alpine ext4)               -> DF-5.2 (DiskInternals Linux Reader)
-            df5.3-usb1.E01                                     -> DF-5.3 (FTK Imager)
-            df5.4-usb2.E01                                     -> DF-5.4 (Autopsy)
-            SHA256SUMS.txt                                     -> chain of custody
-            Export\                                            -> YOUR WORKING DIRECTORY
-
     - name: Provisioning summary
       ansible.builtin.debug:
         msg: >
-          dfvm ready — evidence in {{ case_dir }}; installed: Registry Explorer + RegRipper
-          in {{ tools_dir }}, Autopsy, DiskInternals Linux Reader, FTK Imager 8.3.0.27,
-          7-Zip. Working dir {{ work_dir }} created and Defender-excluded (exported
-          implants survive). ⚠ Verify tool launches and answers on the running VM (Windows GUI steps
-          are SME-checked); see the FTK Imager silent-install note above.
+          dfvm ready — evidence in {{ case_dir }}. On the desktop: Registry Explorer
+          (portable, {{ tools_dir }}), Autopsy, DiskInternals Linux Reader, FTK Imager
+          8.3.0.27. Working dir {{ work_dir }} created and Defender-excluded (exported
+          artifacts survive). ⚠ Verify tool launches and answers on the running VM (Windows
+          GUI steps are SME-checked); see the FTK Imager silent-install note above.
