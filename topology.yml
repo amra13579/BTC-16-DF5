@@ -24,7 +24,7 @@ hosts:
       # (github.com/Panagiotis-INS/BTCM-16-ADV, host wvvm) sets it exactly like this.
       # (An earlier attempt removed this key on a wrong hypothesis; it did not fix the
       # timeout and is restored here.)
-      mgmt_protocol: winrm
+      mgmt_protocol: ssh
     hidden: false
 routers:
   - name: router
