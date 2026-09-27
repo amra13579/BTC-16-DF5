@@ -16,7 +16,7 @@ hosts:
       # DO NOT revert to windows-11-x86_64: with that image the gate timed out (build of
       # 2026-09-12) — windows-11 did not raise a listener within the ~1600s window here,
       # windows-10 does. mgmt_user stays `windows`.
-      image: windows-10-x86_64
+      image: windows-11-x86_64
       mgmt_user: windows
       # mgmt_protocol: winrm — REQUIRED. The platform injects the PSRP/WinRM-HTTPS
       # connection config (ansible_connection=psrp, cert_validation=ignore, port 5986)
